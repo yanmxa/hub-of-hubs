@@ -124,7 +124,7 @@ func addAndParseFlags() {
 		"Producer Id for the kafka, default is the leaf hub name.")
 	pflag.StringVar(&defaultRegionalHubConfig.ProducerConfig.ProducerTopic, "kafka-producer-topic",
 		"status", "Topic for the kafka producer.")
-	pflag.IntVar(&defaultRegionalHubConfig.ProducerConfig.MsgSizeLimitKB, "kafka-message-size-limit", 100,
+	pflag.IntVar(&defaultRegionalHubConfig.ProducerConfig.MsgSizeLimitKB, "kafka-message-size-limit", 940,
 		"The limit for kafka message size in KB.")
 	pflag.StringVar(&defaultRegionalHubConfig.ConsumerConfig.ConsumerTopic, "kafka-consumer-topic",
 		"spec", "Topic for the kafka consumer.")
