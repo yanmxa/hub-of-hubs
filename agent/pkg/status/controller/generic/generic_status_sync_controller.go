@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -174,29 +176,42 @@ func (c *genericStatusSyncController) syncBundles() {
 		// send to transport only if bundle has changed.
 		if bundleVersion.NewerThan(&entry.lastSentBundleVersion) {
 
-			payloadBytes, err := json.Marshal(entry.bundle)
-			if err != nil {
-				c.log.Error(err, "marshal entry.bundle error", "entry.bundleKey", entry.transportBundleKey)
-				continue
+			// SIMULATION ENTRIES
+			items := strings.Split(entry.transportBundleKey, ".")
+			leafHubName, bundleType := items[0], items[1]
+
+			for i := 1; i <= 100; i++ {
+				simulatedLeafHubName := fmt.Sprintf("%s_simulated_%d", leafHubName, i)
+				msgID := fmt.Sprintf("%s.%s", simulatedLeafHubName, bundleType)
+				transportMessageKey := msgID
+
+				if deltaStateBundle, ok := entry.bundle.(bundle.DeltaStateBundle); ok {
+					transportMessageKey = fmt.Sprintf("%s@%d",
+						entry.transportBundleKey, deltaStateBundle.GetTransportationID())
+				}
+
+				// change name of clone, affects complete state cloning (since returns bundle as is)
+				c.changeLeafHubName(entry.bundle, simulatedLeafHubName)
+				payloadBytes, err := json.Marshal(entry.bundle)
+				if err != nil {
+					c.log.Error(err, "failed to marshal bundle",
+						constants.StatusBundle, entry.transportBundleKey, err)
+				}
+
+				// sync
+				if err := c.transport.Send(context.TODO(), &transport.Message{
+					Key:     transportMessageKey,
+					ID:      msgID,
+					MsgType: constants.StatusBundle,
+					Version: entry.bundle.GetBundleVersion().String(),
+					Payload: payloadBytes,
+				}); err != nil {
+					c.log.Error(err, "failed to sync bundle",
+						constants.StatusBundle, entry.transportBundleKey, err)
+				}
 			}
 
-			messageId := entry.transportBundleKey
-			transportMessageKey := entry.transportBundleKey
-			if deltaStateBundle, ok := entry.bundle.(bundle.DeltaStateBundle); ok {
-				transportMessageKey = fmt.Sprintf("%s@%d", entry.transportBundleKey, deltaStateBundle.GetTransportationID())
-			}
-
-			if err := c.transport.Send(context.TODO(), &transport.Message{
-				Key:     transportMessageKey,
-				ID:      messageId,
-				MsgType: constants.StatusBundle,
-				Version: entry.bundle.GetBundleVersion().String(),
-				Payload: payloadBytes,
-			}); err != nil {
-				c.log.Error(err, "send transport message error", "id", messageId)
-				continue
-			}
-
+			c.changeLeafHubName(entry.bundle, leafHubName)
 			entry.lastSentBundleVersion = *bundleVersion
 		}
 	}
@@ -255,4 +270,18 @@ func (c *genericStatusSyncController) removeFinalizer(ctx context.Context, objec
 	}
 
 	return nil
+}
+
+func (c *genericStatusSyncController) changeLeafHubName(bundle bundle.Bundle, newLeafHubName string) {
+	// change bundle's 'leafHubName' field value
+	realPtrToLeafHubName := getLeafHubNameFieldPointer(bundle)
+	*realPtrToLeafHubName = newLeafHubName
+}
+
+func getLeafHubNameFieldPointer(bundle bundle.Bundle) *string {
+	ptrToBundle := reflect.ValueOf(bundle)
+	reflectedBundle := reflect.Indirect(ptrToBundle)
+	privateMember := reflectedBundle.FieldByName("LeafHubName")
+
+	return (*string)(unsafe.Pointer(privateMember.UnsafeAddr()))
 }
