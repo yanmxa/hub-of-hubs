@@ -124,13 +124,18 @@ func (h *genericEmitter) PostUpdate() {
 // }
 
 func (g *genericEmitter) ToCloudEvent() (*cloudevents.Event, error) {
-	e := cloudevents.NewEvent()
-	e.SetSource(config.GetLeafHubName())
-	e.SetType(string(g.eventType))
-	e.SetExtension(eventversion.ExtVersion, g.currentVersion.String())
+	e := ToEvent(config.GetLeafHubName(), string(g.eventType), g.currentVersion.String())
 	if g.dependencyVersion != nil {
 		e.SetExtension(eventversion.ExtDependencyVersion, g.dependencyVersion.String())
 	}
 	err := e.SetData(cloudevents.ApplicationJSON, g.payload)
-	return &e, err
+	return e, err
+}
+
+func ToEvent(source string, eventType string, currentVersion string) *cloudevents.Event {
+	e := cloudevents.NewEvent()
+	e.SetSource(source)
+	e.SetType(eventType)
+	e.SetExtension(eventversion.ExtDependencyVersion, currentVersion)
+	return &e
 }
