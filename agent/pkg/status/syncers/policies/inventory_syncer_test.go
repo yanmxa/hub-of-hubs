@@ -19,12 +19,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/stolostron/multicluster-global-hub/agent/pkg/configs"
 	"github.com/stolostron/multicluster-global-hub/pkg/transport"
 )
 
 func TestPolicyControllerReconcile(t *testing.T) {
 	// Setup scheme and mock requester
 	scheme := runtime.NewScheme()
+	configs.SetAgentConfig(&configs.AgentConfig{LeafHubName: "leaf-hub-name"})
 	_ = policiesv1.AddToScheme(scheme)
 	mockRequester := &MockRequest{}
 
