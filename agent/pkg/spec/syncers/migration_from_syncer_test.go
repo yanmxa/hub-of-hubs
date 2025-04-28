@@ -204,7 +204,7 @@ func TestMigrationSourceHubSyncer(t *testing.T) {
 			transportClient.SetProducer(&producer)
 
 			transportConfig := &transport.TransportInternalConfig{
-				TransportType: string(transport.Kafka),
+				TransportType: string(transport.Chan),
 				KafkaCredential: &transport.KafkaConfig{
 					SpecTopic:      "spec",
 					MigrationTopic: "migration",
