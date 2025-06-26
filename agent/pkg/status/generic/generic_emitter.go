@@ -8,6 +8,7 @@ import (
 	"github.com/stolostron/multicluster-global-hub/agent/pkg/status/interfaces"
 	eventversion "github.com/stolostron/multicluster-global-hub/pkg/bundle/version"
 	"github.com/stolostron/multicluster-global-hub/pkg/enum"
+	"github.com/stolostron/multicluster-global-hub/pkg/utils"
 )
 
 var _ interfaces.Emitter = &genericEmitter{}
@@ -46,6 +47,9 @@ func (e *genericEmitter) applyOptions(opts ...EmitterOption) {
 }
 
 func (h *genericEmitter) ShouldSend() bool {
+	if h.eventType == enum.LocalPolicySpecType {
+		log.Infof("sending the local policy condition: %s, current version: %s, last sent version: %s", h.currentVersion.NewerThan(&h.lastSentVersion), h.currentVersion.String(), h.lastSentVersion.String())
+	}
 	return h.currentVersion.NewerThan(&h.lastSentVersion)
 }
 
@@ -74,6 +78,14 @@ func (g *genericEmitter) ToCloudEvent(payload interface{}) (*cloudevents.Event, 
 		e.SetExtension(eventversion.ExtDependencyVersion, g.dependencyVersion.String())
 	}
 	err := e.SetData(cloudevents.ApplicationJSON, payload)
+	if err != nil {
+		log.Error(err, "failed to set data for CloudEvent", "eventType", g.eventType, "payload", payload)
+		return nil, err
+	}
+	if g.eventType == enum.LocalPolicySpecType {
+		log.Info("generating CloudEvent for local policy spec")
+		utils.PrettyPrint(e)
+	}
 	return &e, err
 }
 

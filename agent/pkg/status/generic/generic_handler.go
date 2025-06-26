@@ -6,7 +6,11 @@ import (
 
 	"github.com/stolostron/multicluster-global-hub/agent/pkg/status/interfaces"
 	genericpayload "github.com/stolostron/multicluster-global-hub/pkg/bundle/generic"
+	"github.com/stolostron/multicluster-global-hub/pkg/logger"
+	policiesv1 "open-cluster-management.io/governance-policy-propagator/api/v1"
 )
+
+var log = logger.DefaultZapLogger()
 
 type genericHandler struct {
 	eventData *genericpayload.GenericObjectBundle
@@ -36,6 +40,19 @@ func (h *genericHandler) Get() interface{} {
 }
 
 func (h *genericHandler) Update(obj client.Object) bool {
+	// if obj is instance policiesv1.Policy, we need to check if it is a root policy, assert it
+	isPolicy := false
+	if policy, ok := obj.(*policiesv1.Policy); ok {
+		isPolicy = true
+		log.Infof("updating the policy %s/%s into bundle %v", policy.GetNamespace(), policy.GetName(), *h.eventData)
+	}
+
+	defer func() {
+		if isPolicy {
+			log.Infof("updated the policy %s/%s into bundle %v", obj.GetNamespace(), obj.GetName(), *h.eventData)
+		}
+	}()
+
 	if h.shouldUpdate != nil {
 		if updated := h.shouldUpdate(obj); !updated {
 			return false
@@ -50,11 +67,13 @@ func (h *genericHandler) Update(obj client.Object) bool {
 
 	old := (*h.eventData)[index]
 	if h.isSpec && old.GetGeneration() == obj.GetGeneration() {
+		log.Infof("skipping update for %s/%s, generation is the same: %d", obj.GetNamespace(), obj.GetName(), obj.GetGeneration())
 		return false
 	}
 
 	// if we reached here, object already exists in the bundle. check if we need to update the object
 	if obj.GetResourceVersion() == (*h.eventData)[index].GetResourceVersion() {
+		log.Infof("skipping update for %s/%s, resourceVersion is the same: %d", obj.GetNamespace(), obj.GetName(), obj.GetGeneration())
 		return false // update in bundle only if object changed. check for changes using resourceVersion field
 	}
 
@@ -68,6 +87,7 @@ func (h *genericHandler) Update(obj client.Object) bool {
 }
 
 func (h *genericHandler) Delete(obj client.Object) bool {
+	log.Infof("deleting the object %s/%s from bundle %v", obj.GetNamespace(), obj.GetName(), *h.eventData)
 	if h.shouldUpdate != nil {
 		if updated := h.shouldUpdate(obj); !updated {
 			return false
@@ -80,6 +100,7 @@ func (h *genericHandler) Delete(obj client.Object) bool {
 	}
 
 	(*h.eventData) = append((*h.eventData)[:index], (*h.eventData)[index+1:]...) // remove from objects
+	log.Infof("deleted the object %s/%s from bundle %v", obj.GetNamespace(), obj.GetName(), *h.eventData)
 	return true
 }
 

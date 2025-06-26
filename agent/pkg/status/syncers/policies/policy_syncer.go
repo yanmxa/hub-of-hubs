@@ -58,7 +58,7 @@ func LaunchPolicySyncer(ctx context.Context, mgr ctrl.Manager, agentConfig *conf
 	)
 	localStatusEventEmitter := handlers.NewPolicyStatusEventEmitter(enum.LocalReplicatedPolicyEventType)
 
-	// 4. local policy spec
+	// 4. local root policy spec
 	localPolicySpecHandler := generic.NewGenericHandler(&genericpayload.GenericObjectBundle{},
 		generic.WithShouldUpdate(
 			func(obj client.Object) bool {
