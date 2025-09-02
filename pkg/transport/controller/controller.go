@@ -51,7 +51,6 @@ type TransportCtrl struct {
 	// inManager is used to check if the controller is in the manager.
 	// if it's true, then the controller is in the manager, otherwise it's in the agent.
 	inManager           bool
-	disableConsumer     bool
 	kafkaConsumerCtx    context.Context
 	kafkaConsumerCancel context.CancelFunc
 }
