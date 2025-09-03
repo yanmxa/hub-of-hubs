@@ -12,7 +12,6 @@ import (
 	kafka_confluent "github.com/cloudevents/sdk-go/protocol/kafka_confluent/v2"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/cloudevents/sdk-go/v2/client"
-	cectx "github.com/cloudevents/sdk-go/v2/context"
 	ceprotocol "github.com/cloudevents/sdk-go/v2/protocol"
 	"github.com/cloudevents/sdk-go/v2/protocol/gochan"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -20,7 +19,6 @@ import (
 	"github.com/stolostron/multicluster-global-hub/pkg/database"
 	"github.com/stolostron/multicluster-global-hub/pkg/database/models"
 	"github.com/stolostron/multicluster-global-hub/pkg/enum"
-	"github.com/stolostron/multicluster-global-hub/pkg/logger"
 	"github.com/stolostron/multicluster-global-hub/pkg/transport"
 	"github.com/stolostron/multicluster-global-hub/pkg/transport/config"
 )
@@ -33,10 +31,10 @@ type GenericConsumer struct {
 	enableDatabaseOffset bool
 	clusterID            string
 
-	consumerCtx    context.Context
-	consumerCancel context.CancelFunc
-	client         cloudevents.Client
-	kafkaConsumer  *kafka.Consumer
+	// consumerCtx    context.Context
+	// consumerCancel context.CancelFunc
+	client        cloudevents.Client
+	kafkaConsumer *kafka.Consumer
 
 	mutex sync.Mutex
 }
@@ -116,33 +114,33 @@ func (c *GenericConsumer) applyOptions(opts ...GenericConsumeOption) error {
 	return nil
 }
 
-func (c *GenericConsumer) Reconnect(ctx context.Context,
-	tranConfig *transport.TransportInternalConfig, topics []string,
-) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+// func (c *GenericConsumer) Reconnect(ctx context.Context,
+// 	tranConfig *transport.TransportInternalConfig, topics []string,
+// ) error {
+// 	c.mutex.Lock()
+// 	defer c.mutex.Unlock()
 
-	err := c.initClient(tranConfig, topics)
-	if err != nil {
-		return err
-	}
+// 	err := c.initClient(tranConfig, topics)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	// close the previous consumer
-	if c.consumerCancel != nil {
-		c.consumerCancel()
-	}
-	c.consumerCtx, c.consumerCancel = context.WithCancel(ctx)
+// 	// close the previous consumer
+// 	if c.consumerCancel != nil {
+// 		c.consumerCancel()
+// 	}
+// 	c.consumerCtx, c.consumerCancel = context.WithCancel(ctx)
 
-	go func() {
-		if err := c.Start(c.consumerCtx); err != nil {
-			log.Errorf("failed to reconnect(start) the consumer: %v", err)
-		}
-	}()
-	return nil
-}
+// 	go func() {
+// 		if err := c.Start(c.consumerCtx); err != nil {
+// 			log.Errorf("failed to reconnect(start) the consumer: %v", err)
+// 		}
+// 	}()
+// 	return nil
+// }
 
 func (c *GenericConsumer) Start(ctx context.Context) error {
-	receiveContext := cectx.WithLogger(ctx, logger.ZapLogger("cloudevents"))
+	// receiveContext := cectx.WithLogger(ctx, logger.ZapLogger("cloudevents"))
 	if c.enableDatabaseOffset {
 		offsets, err := getInitOffset(c.clusterID)
 		if err != nil {
@@ -150,12 +148,12 @@ func (c *GenericConsumer) Start(ctx context.Context) error {
 		}
 		log.Infow("init consumer", "offsets", offsets)
 		if len(offsets) > 0 {
-			receiveContext = kafka_confluent.WithTopicPartitionOffsets(ctx, offsets)
+			ctx = kafka_confluent.WithTopicPartitionOffsets(ctx, offsets)
 		}
 	}
 
-	c.consumerCtx, c.consumerCancel = context.WithCancel(receiveContext)
-	err := c.client.StartReceiver(c.consumerCtx, func(ctx context.Context, event cloudevents.Event) ceprotocol.Result {
+	// c.consumerCtx, c.consumerCancel = context.WithCancel(receiveContext)
+	err := c.client.StartReceiver(ctx, func(ctx context.Context, event cloudevents.Event) ceprotocol.Result {
 		log.Debugw("received message", "event.Source", event.Source(), "event.Type",
 			enum.ShortenEventType(event.Type()))
 
