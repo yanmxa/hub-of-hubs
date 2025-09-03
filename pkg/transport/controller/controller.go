@@ -277,9 +277,12 @@ func (c *TransportCtrl) ReconcileKafkaCredential(ctx context.Context, secret *co
 	}
 
 	// if credentials aren't updated, then return
+	log.Infof("transport secret, cached %v, get %v", c.transportConfig.KafkaCredential, kafkaConn)
 	if reflect.DeepEqual(c.transportConfig.KafkaCredential, kafkaConn) {
+		log.Info("transport secret config equal")
 		return false, nil
 	}
+	log.Info("transport secret cache updated")
 	c.transportConfig.KafkaCredential = kafkaConn
 	return true, nil
 }
