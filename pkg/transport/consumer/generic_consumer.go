@@ -54,7 +54,7 @@ func NewGenericConsumer(tranConfig *transport.TransportInternalConfig, topics []
 	opts ...GenericConsumeOption,
 ) (*GenericConsumer, error) {
 	c := &GenericConsumer{
-		eventChan:            make(chan *cloudevents.Event),
+		eventChan:            make(chan *cloudevents.Event, 1000), // Add buffer to prevent blocking
 		assembler:            newMessageAssembler(),
 		enableDatabaseOffset: tranConfig.EnableDatabaseOffset,
 	}
