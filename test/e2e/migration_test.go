@@ -354,8 +354,11 @@ func mockKlusterletStatusManifestWork(ctx context.Context, targetHubClient clien
 					},
 					Conditions: []metav1.Condition{
 						{
-							Type:   "Applied",
-							Status: metav1.ConditionTrue,
+							Type:               "Applied",
+							Status:             metav1.ConditionTrue,
+							LastTransitionTime: metav1.Now(),
+							Reason:             "AppliedManifestWorkComplete",
+							Message:            "Apply manifest work complete",
 						},
 					},
 				},
