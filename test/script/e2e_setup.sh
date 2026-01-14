@@ -61,6 +61,15 @@ for i in $(seq 1 "${MH_NUM}"); do
 done
 echo -e "${YELLOW} initializing hubs:${NC} $(($(date +%s) - start_time)) seconds"
 
+# Install KlusterletConfig CRD and create multicluster-engine namespace on each hub
+# This is required for migration e2e tests in OCM environment
+for i in $(seq 1 "${MH_NUM}"); do
+  echo -e "${YELLOW}Installing KlusterletConfig CRD on hub$i${NC}"
+  kubectl apply -f "$TEST_DIR/manifest/crd/klusterletconfig.yaml" --kubeconfig "$CONFIG_DIR/hub$i" 2>/dev/null || true
+  echo -e "${YELLOW}Creating multicluster-engine namespace on hub$i${NC}"
+  kubectl create namespace multicluster-engine --kubeconfig "$CONFIG_DIR/hub$i" 2>/dev/null || true
+done
+
 # async ocm, policy
 start_time=$(date +%s)
 

@@ -43,6 +43,10 @@ const (
 	KlusterletManifestWorkSuffix = "-klusterlet"
 	ClusterManagerName           = "cluster-manager"
 	errMsgFailedToGet            = "failed to get %s from source resource: %w"
+
+	// Bootstrap ClusterRole names for different environments
+	DefaultACMBootstrapClusterRole = "open-cluster-management:managedcluster:bootstrap:agent-registration"
+	DefaultOCMBootstrapClusterRole = "open-cluster-management:bootstrap"
 )
 
 var (
@@ -764,10 +768,32 @@ func (s *MigrationTargetSyncer) ensureSubjectAccessReviewRole(ctx context.Contex
 	return nil
 }
 
+// getBootstrapClusterRoleName dynamically detects the bootstrap ClusterRole name.
+// It first checks for ACM/MCE ClusterRole, then falls back to OCM ClusterRole.
+func (s *MigrationTargetSyncer) getBootstrapClusterRoleName(ctx context.Context) (string, error) {
+	// Try ACM/MCE ClusterRole first
+	cr := &rbacv1.ClusterRole{}
+	if err := s.client.Get(ctx, types.NamespacedName{Name: DefaultACMBootstrapClusterRole}, cr); err == nil {
+		return DefaultACMBootstrapClusterRole, nil
+	}
+
+	// Fallback to OCM ClusterRole
+	if err := s.client.Get(ctx, types.NamespacedName{Name: DefaultOCMBootstrapClusterRole}, cr); err == nil {
+		return DefaultOCMBootstrapClusterRole, nil
+	}
+
+	return "", fmt.Errorf("no bootstrap ClusterRole found (tried %s and %s)",
+		DefaultACMBootstrapClusterRole, DefaultOCMBootstrapClusterRole)
+}
+
 func (s *MigrationTargetSyncer) ensureRegistrationClusterRoleBinding(ctx context.Context,
 	msaName, msaNamespace string,
 ) error {
-	registrationClusterRoleName := "open-cluster-management:managedcluster:bootstrap:agent-registration"
+	registrationClusterRoleName, err := s.getBootstrapClusterRoleName(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get bootstrap ClusterRole name: %w", err)
+	}
+	log.Infof("using bootstrap ClusterRole: %s", registrationClusterRoleName)
 	registrationClusterRoleBindingName := GetAgentRegistrationClusterRoleBindingName(msaName)
 	registrationClusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
