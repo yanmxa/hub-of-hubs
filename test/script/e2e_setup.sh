@@ -118,6 +118,17 @@ fi
 
 echo -e "${YELLOW} installing ocm and policy:${NC} $(($(date +%s) - start_time)) seconds"
 
+# Install managed-serviceaccount addon on global hub
+# This is required for migration functionality to create ServiceAccounts and collect tokens
+echo -e "${YELLOW}Installing managed-serviceaccount addon on global hub${NC}"
+helm repo add ocm https://open-cluster-management.io/helm-charts 2>/dev/null || true
+helm repo update ocm
+helm install -n open-cluster-management-addon --create-namespace \
+  managed-serviceaccount ocm/managed-serviceaccount --kubeconfig "$GH_KUBECONFIG" 2>/dev/null || true
+kubectl wait deployment -n open-cluster-management-addon managed-serviceaccount-addon-manager \
+  --for condition=Available=True --timeout=120s --kubeconfig "$GH_KUBECONFIG" || true
+echo -e "${YELLOW}managed-serviceaccount addon installed${NC}"
+
 # apply standalone agent
 helm install event-exporter "$PROJECT_DIR"/doc/event-exporter -n open-cluster-management --set image="$MULTICLUSTER_GLOBAL_HUB_AGENT_IMAGE_REF" --set sourceName="event-exporter" --kubeconfig "$GH_KUBECONFIG"
 
