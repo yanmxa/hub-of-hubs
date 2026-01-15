@@ -224,7 +224,90 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			By("Creating mock token secret for migration in target hub namespace")
+			By("Getting real CA certificate from target hub")
+			// Get the CA certificate from target hub's kube-root-ca.crt ConfigMap
+			caCM := &corev1.ConfigMap{}
+			err = targetHubClient.Get(ctx, types.NamespacedName{
+				Name:      "kube-root-ca.crt",
+				Namespace: "default",
+			}, caCM)
+			Expect(err).NotTo(HaveOccurred())
+			caCert := caCM.Data["ca.crt"]
+			Expect(caCert).NotTo(BeEmpty())
+
+			By("Creating ServiceAccount for migration on target hub")
+			// Create a ServiceAccount that can be used for bootstrap
+			migrationSA := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("migrate-%s", clusterToMigrate),
+					Namespace: "open-cluster-management",
+				},
+			}
+			err = targetHubClient.Create(ctx, migrationSA)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Creating ClusterRoleBinding for migration ServiceAccount on target hub")
+			// Grant the ServiceAccount cluster-admin role for testing
+			migrationCRB := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("migrate-%s-admin", clusterToMigrate),
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      fmt.Sprintf("migrate-%s", clusterToMigrate),
+						Namespace: "open-cluster-management",
+					},
+				},
+			}
+			err = targetHubClient.Create(ctx, migrationCRB)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Creating token secret for migration ServiceAccount on target hub")
+			// Create a long-lived token for the ServiceAccount
+			tokenSecretOnTargetHub := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("migrate-%s-token", clusterToMigrate),
+					Namespace: "open-cluster-management",
+					Annotations: map[string]string{
+						"kubernetes.io/service-account.name": fmt.Sprintf("migrate-%s", clusterToMigrate),
+					},
+				},
+				Type: corev1.SecretTypeServiceAccountToken,
+			}
+			err = targetHubClient.Create(ctx, tokenSecretOnTargetHub)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Waiting for token to be populated")
+			var saToken string
+			Eventually(func() bool {
+				secret := &corev1.Secret{}
+				if err := targetHubClient.Get(ctx, types.NamespacedName{
+					Name:      fmt.Sprintf("migrate-%s-token", clusterToMigrate),
+					Namespace: "open-cluster-management",
+				}, secret); err != nil {
+					return false
+				}
+				token, ok := secret.Data["token"]
+				if !ok || len(token) == 0 {
+					return false
+				}
+				saToken = string(token)
+				return true
+			}, time.Minute, migrationPollInterval).Should(BeTrue())
+
+			By("Creating token secret for migration in target hub namespace on global hub")
 			// The migration controller expects a secret with the migration name in the target hub namespace
 			tokenSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -232,8 +315,8 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 					Namespace: targetHubName,
 				},
 				Data: map[string][]byte{
-					"token":  []byte("mock-token"),
-					"ca.crt": []byte("mock-ca-cert"),
+					"token":  []byte(saToken),
+					"ca.crt": []byte(caCert),
 				},
 			}
 			err = globalHubClient.Create(ctx, tokenSecret)
