@@ -92,16 +92,17 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 
 		By("Restarting global-hub-agent on source hub to force cache refresh")
 		// The agent's informer cache may have stale data; restart the agent to force a fresh cache
+		agentNamespace := "multicluster-global-hub-agent"
 		agentDeployment := &appsv1.Deployment{}
 		err = sourceHubClient.Get(ctx, types.NamespacedName{
 			Name:      "multicluster-global-hub-agent",
-			Namespace: "multicluster-global-hub",
+			Namespace: agentNamespace,
 		}, agentDeployment)
 		if err == nil {
 			// Delete the agent pods to force a restart
 			podList := &corev1.PodList{}
 			listOpts := []client.ListOption{
-				client.InNamespace("multicluster-global-hub"),
+				client.InNamespace(agentNamespace),
 				client.MatchingLabels{"name": "multicluster-global-hub-agent"},
 			}
 			if err := sourceHubClient.List(ctx, podList, listOpts...); err == nil {
