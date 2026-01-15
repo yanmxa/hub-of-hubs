@@ -72,6 +72,40 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 	})
 
 	Context("Migration from source hub to target hub", func() {
+		It("should ensure managed cluster is available on source hub", func() {
+			By("Patching managed cluster status to Available")
+			// In KinD e2e, the work-agent doesn't run so the lease isn't updated
+			// The migration validation requires the cluster to be Available
+			mc := &clusterv1.ManagedCluster{}
+			err := sourceHubClient.Get(ctx, types.NamespacedName{Name: clusterToMigrate}, mc)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Update the ManagedClusterConditionAvailable to True
+			availableConditionFound := false
+			for i, cond := range mc.Status.Conditions {
+				if cond.Type == "ManagedClusterConditionAvailable" {
+					mc.Status.Conditions[i].Status = metav1.ConditionTrue
+					mc.Status.Conditions[i].Reason = "ManagedClusterAvailable"
+					mc.Status.Conditions[i].Message = "Managed cluster is available"
+					availableConditionFound = true
+					break
+				}
+			}
+			if !availableConditionFound {
+				mc.Status.Conditions = append(mc.Status.Conditions, metav1.Condition{
+					Type:               "ManagedClusterConditionAvailable",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ManagedClusterAvailable",
+					Message:            "Managed cluster is available",
+					LastTransitionTime: metav1.Now(),
+				})
+			}
+			Expect(sourceHubClient.Status().Update(ctx, mc)).To(Succeed())
+
+			By("Waiting for cluster status to be synced")
+			time.Sleep(5 * time.Second) // Give the agent time to observe the updated status
+		})
+
 		It("should verify cluster exists on source hub before migration", func() {
 			mc := &clusterv1.ManagedCluster{}
 			err := sourceHubClient.Get(ctx, types.NamespacedName{Name: clusterToMigrate}, mc)
