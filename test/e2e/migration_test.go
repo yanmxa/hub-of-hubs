@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	addonapiv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 	operatorv1 "open-cluster-management.io/api/operator/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
@@ -81,6 +82,41 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 			mc := &clusterv1.ManagedCluster{}
 			err := targetHubClient.Get(ctx, types.NamespacedName{Name: clusterToMigrate}, mc)
 			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("should setup managed-serviceaccount addon mock on global hub", func() {
+			By("Creating managed-serviceaccount ManagedClusterAddOn in target hub namespace")
+			// The migration controller looks for this addon in the target hub's namespace on global hub
+			addOn := &addonapiv1alpha1.ManagedClusterAddOn{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-serviceaccount",
+					Namespace: targetHubName, // hub2 namespace on global hub
+				},
+				Spec: addonapiv1alpha1.ManagedClusterAddOnSpec{
+					InstallNamespace: "open-cluster-management-agent-addon",
+				},
+			}
+			err := globalHubClient.Create(ctx, addOn)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Creating mock token secret for migration in target hub namespace")
+			// The migration controller expects a secret with the migration name in the target hub namespace
+			tokenSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("migrate-%s", clusterToMigrate),
+					Namespace: targetHubName,
+				},
+				Data: map[string][]byte{
+					"token":  []byte("mock-token"),
+					"ca.crt": []byte("mock-ca-cert"),
+				},
+			}
+			err = globalHubClient.Create(ctx, tokenSecret)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
 		})
 
 		It("should create ManagedClusterMigration CR", func() {
