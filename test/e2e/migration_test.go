@@ -8,6 +8,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -89,8 +90,29 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 		}
 		Expect(sourceHubClient.Status().Update(ctx, mc)).To(Succeed())
 
-		By("Waiting for agent informer cache to sync")
-		time.Sleep(15 * time.Second) // Give the agent's informer time to observe the updated status
+		By("Restarting global-hub-agent on source hub to force cache refresh")
+		// The agent's informer cache may have stale data; restart the agent to force a fresh cache
+		agentDeployment := &appsv1.Deployment{}
+		err = sourceHubClient.Get(ctx, types.NamespacedName{
+			Name:      "multicluster-global-hub-agent",
+			Namespace: "multicluster-global-hub",
+		}, agentDeployment)
+		if err == nil {
+			// Delete the agent pods to force a restart
+			podList := &corev1.PodList{}
+			listOpts := []client.ListOption{
+				client.InNamespace("multicluster-global-hub"),
+				client.MatchingLabels{"name": "multicluster-global-hub-agent"},
+			}
+			if err := sourceHubClient.List(ctx, podList, listOpts...); err == nil {
+				for _, pod := range podList.Items {
+					_ = sourceHubClient.Delete(ctx, &pod)
+				}
+			}
+		}
+
+		By("Waiting for agent to restart and sync")
+		time.Sleep(30 * time.Second) // Give the agent time to restart and sync its cache
 	})
 
 	AfterAll(func() {
