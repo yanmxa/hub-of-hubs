@@ -376,7 +376,7 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 			}, 2*time.Minute, migrationPollInterval).Should(BeTrue())
 		})
 
-		It("should wait for Registering phase and mock klusterlet status ManifestWork", func() {
+		It("should wait for Registering phase and prepare target hub resources", func() {
 			By("Waiting for migration to reach Registering phase")
 			Eventually(func() string {
 				mcm := &migrationv1alpha1.ManagedClusterMigration{}
@@ -389,10 +389,10 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 				return string(mcm.Status.Phase)
 			}, 5*time.Minute, migrationPollInterval).Should(Equal("Registering"))
 
-			By("Mock: Creating klusterlet status ManifestWork on target hub")
+			By("Creating klusterlet status ManifestWork on target hub")
 			mockKlusterletStatusManifestWork(ctx, targetHubClient, clusterToMigrate)
 
-			By("Mock: Simulating cluster registration on target hub")
+			By("Ensuring cluster namespace exists on target hub")
 			mockClusterRegistration(ctx, targetHubClient, clusterToMigrate)
 		})
 
@@ -609,60 +609,15 @@ func mockKlusterletStatusManifestWork(ctx context.Context, targetHubClient clien
 		Expect(targetHubClient.Create(ctx, manifestWork)).To(Succeed())
 	}
 
-	// Mock the ManifestWork status to show WorkApplied = True
-	Eventually(func() error {
-		work := &workv1.ManifestWork{}
-		if err := targetHubClient.Get(ctx, client.ObjectKeyFromObject(manifestWork), work); err != nil {
-			return err
-		}
-		work.Status.Conditions = []metav1.Condition{
-			{
-				Type:               workv1.WorkApplied,
-				Status:             metav1.ConditionTrue,
-				LastTransitionTime: metav1.Now(),
-				Reason:             "AppliedManifestComplete",
-				Message:            "Apply manifest work complete",
-			},
-		}
-		// Mock feedback showing klusterlet is available
-		work.Status.ResourceStatus = workv1.ManifestResourceStatus{
-			Manifests: []workv1.ManifestCondition{
-				{
-					ResourceMeta: workv1.ManifestResourceMeta{
-						Group:    "operator.open-cluster-management.io",
-						Resource: "klusterlets",
-						Name:     "klusterlet",
-					},
-					StatusFeedbacks: workv1.StatusFeedbackResult{
-						Values: []workv1.FeedbackValue{
-							{
-								Name: "isAvailable",
-								Value: workv1.FieldValue{
-									Type:   workv1.String,
-									String: ptrString("True"),
-								},
-							},
-						},
-					},
-					Conditions: []metav1.Condition{
-						{
-							Type:               "Applied",
-							Status:             metav1.ConditionTrue,
-							LastTransitionTime: metav1.Now(),
-							Reason:             "AppliedManifestWorkComplete",
-							Message:            "Apply manifest work complete",
-						},
-					},
-				},
-			},
-		}
-		return targetHubClient.Status().Update(ctx, work)
-	}, time.Minute, migrationPollInterval).Should(Succeed())
+	// Note: ManifestWork status will be reported naturally by work-agent
+	// once the cluster registers with the target hub
 }
 
-// mockClusterRegistration simulates cluster registration on the target hub
+// mockClusterRegistration ensures the cluster namespace exists on target hub.
+// The ManagedCluster and its status will be created/updated by the migration controller
+// and registration-agent respectively.
 func mockClusterRegistration(ctx context.Context, targetHubClient client.Client, clusterName string) {
-	// Create namespace for the cluster
+	// Ensure the cluster namespace exists on target hub
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: clusterName,
@@ -670,49 +625,7 @@ func mockClusterRegistration(ctx context.Context, targetHubClient client.Client,
 	}
 	_ = targetHubClient.Create(ctx, ns)
 
-	// Create ManagedCluster on target hub (simulating agent registration)
-	mc := &clusterv1.ManagedCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: clusterName,
-		},
-		Spec: clusterv1.ManagedClusterSpec{
-			HubAcceptsClient:     true,
-			LeaseDurationSeconds: 60,
-		},
-	}
-
-	existing := &clusterv1.ManagedCluster{}
-	err := targetHubClient.Get(ctx, types.NamespacedName{Name: clusterName}, existing)
-	if errors.IsNotFound(err) {
-		Expect(targetHubClient.Create(ctx, mc)).To(Succeed())
-	}
-
-	// Update status to show cluster is available
-	Eventually(func() error {
-		mc := &clusterv1.ManagedCluster{}
-		if err := targetHubClient.Get(ctx, types.NamespacedName{Name: clusterName}, mc); err != nil {
-			return err
-		}
-		mc.Status.Conditions = []metav1.Condition{
-			{
-				Type:               clusterv1.ManagedClusterConditionAvailable,
-				Status:             metav1.ConditionTrue,
-				LastTransitionTime: metav1.Now(),
-				Reason:             "ManagedClusterAvailable",
-				Message:            "Managed cluster is available",
-			},
-			{
-				Type:               clusterv1.ManagedClusterConditionJoined,
-				Status:             metav1.ConditionTrue,
-				LastTransitionTime: metav1.Now(),
-				Reason:             "ManagedClusterJoined",
-				Message:            "Managed cluster joined",
-			},
-		}
-		return targetHubClient.Status().Update(ctx, mc)
-	}, time.Minute, migrationPollInterval).Should(Succeed())
-}
-
-func ptrString(s string) *string {
-	return &s
+	// Note: ManagedCluster is created by migration controller with hubAcceptsClient=true
+	// The cluster status (Available, Joined) will be updated by registration-agent
+	// once the klusterlet registers with the target hub
 }
