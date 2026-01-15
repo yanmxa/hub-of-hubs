@@ -127,14 +127,24 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 			mockKlusterletMigration(ctx, sourceHubClient, clusterToMigrate, targetHubName)
 		})
 
-		It("should verify bootstrap secret and klusterlet are configured on managed cluster", func() {
-			bootstrapSecretName := fmt.Sprintf("bootstrap-%s", targetHubName)
+		It("should verify bootstrap secrets and klusterlet are configured on managed cluster", func() {
+			targetBootstrapSecretName := fmt.Sprintf("bootstrap-%s", targetHubName)
+			sourceHubSecretName := "hub-kubeconfig-secret"
 
-			By("Verifying bootstrap secret exists on managed cluster")
+			By("Verifying target hub bootstrap secret exists on managed cluster")
 			Eventually(func() error {
 				secret := &corev1.Secret{}
 				return managedClusterClient.Get(ctx, types.NamespacedName{
-					Name:      bootstrapSecretName,
+					Name:      targetBootstrapSecretName,
+					Namespace: "open-cluster-management-agent",
+				}, secret)
+			}, 2*time.Minute, migrationPollInterval).Should(Succeed())
+
+			By("Verifying source hub kubeconfig secret exists on managed cluster")
+			Eventually(func() error {
+				secret := &corev1.Secret{}
+				return managedClusterClient.Get(ctx, types.NamespacedName{
+					Name:      sourceHubSecretName,
 					Namespace: "open-cluster-management-agent",
 				}, secret)
 			}, 2*time.Minute, migrationPollInterval).Should(Succeed())
@@ -169,7 +179,7 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 				}
 				// Check if the target hub bootstrap secret is in the list
 				for _, secret := range klusterlet.Spec.RegistrationConfiguration.BootstrapKubeConfigs.LocalSecrets.KubeConfigSecrets {
-					if secret.Name == bootstrapSecretName {
+					if secret.Name == targetBootstrapSecretName {
 						return true
 					}
 				}
