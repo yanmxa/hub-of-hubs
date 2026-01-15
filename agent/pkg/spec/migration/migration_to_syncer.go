@@ -409,6 +409,12 @@ func (s *MigrationTargetSyncer) initializing(ctx context.Context,
 		return err
 	}
 
+	// In OCM environment, delay 1 minute after all resources are created to allow manual testing
+	if s.isOCMEnvironment(ctx) {
+		log.Infof("OCM environment detected, delaying 1 minute after initializing to allow manual resource mocking")
+		time.Sleep(1 * time.Minute)
+	}
+
 	return nil
 }
 
@@ -784,6 +790,21 @@ func (s *MigrationTargetSyncer) getBootstrapClusterRoleName(ctx context.Context)
 
 	return "", fmt.Errorf("no bootstrap ClusterRole found (tried %s and %s)",
 		DefaultACMBootstrapClusterRole, DefaultOCMBootstrapClusterRole)
+}
+
+// isOCMEnvironment checks if running in OCM environment (not ACM/MCE)
+// Returns true if only OCM ClusterRole exists, false if ACM ClusterRole exists
+func (s *MigrationTargetSyncer) isOCMEnvironment(ctx context.Context) bool {
+	cr := &rbacv1.ClusterRole{}
+	// If ACM ClusterRole exists, it's not OCM environment
+	if err := s.client.Get(ctx, types.NamespacedName{Name: DefaultACMBootstrapClusterRole}, cr); err == nil {
+		return false
+	}
+	// If only OCM ClusterRole exists, it's OCM environment
+	if err := s.client.Get(ctx, types.NamespacedName{Name: DefaultOCMBootstrapClusterRole}, cr); err == nil {
+		return true
+	}
+	return false
 }
 
 func (s *MigrationTargetSyncer) ensureRegistrationClusterRoleBinding(ctx context.Context,
