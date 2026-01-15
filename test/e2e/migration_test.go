@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -114,6 +115,36 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 				},
 			}
 			err = globalHubClient.Create(ctx, tokenSecret)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Creating bootstrap ClusterRole on target hub for migration")
+			// The agent migration syncer requires this ClusterRole to exist on the target hub
+			bootstrapClusterRoleName := "open-cluster-management:managedcluster:bootstrap:agent-registration"
+			bootstrapClusterRole := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: bootstrapClusterRoleName,
+				},
+			}
+			err = targetHubClient.Create(ctx, bootstrapClusterRole)
+			if !errors.IsAlreadyExists(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("Creating bootstrap ClusterRoleBinding on target hub for migration")
+			// The agent migration syncer looks for this ClusterRoleBinding
+			bootstrapClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: bootstrapClusterRoleName,
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     bootstrapClusterRoleName,
+				},
+			}
+			err = targetHubClient.Create(ctx, bootstrapClusterRoleBinding)
 			if !errors.IsAlreadyExists(err) {
 				Expect(err).NotTo(HaveOccurred())
 			}
