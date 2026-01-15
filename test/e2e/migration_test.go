@@ -331,6 +331,28 @@ func mockKlusterletMigration(ctx context.Context, sourceHubClient, managedCluste
 	if errors.IsNotFound(err) {
 		Expect(sourceHubClient.Create(ctx, manifestWork)).To(Succeed())
 	}
+
+	// Since there's no work-agent in Kind e2e environment, directly apply resources to managed cluster
+	// This simulates what the work-agent would do when it applies the ManifestWork
+
+	// Create bootstrap secret on managed cluster
+	managedClusterBootstrapSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bootstrapSecretName,
+			Namespace: "open-cluster-management-agent",
+		},
+		Data: bootstrapSecret.Data,
+		Type: corev1.SecretTypeOpaque,
+	}
+	existingSecret := &corev1.Secret{}
+	err = managedClusterClient.Get(ctx, client.ObjectKeyFromObject(managedClusterBootstrapSecret), existingSecret)
+	if errors.IsNotFound(err) {
+		Expect(managedClusterClient.Create(ctx, managedClusterBootstrapSecret)).To(Succeed())
+	}
+
+	// Update klusterlet on managed cluster (remove TypeMeta for update)
+	existingKlusterlet.TypeMeta = metav1.TypeMeta{}
+	Expect(managedClusterClient.Update(ctx, existingKlusterlet)).To(Succeed())
 }
 
 // mockKlusterletStatusManifestWork creates a ReadOnly ManifestWork on target hub
@@ -344,10 +366,10 @@ func mockKlusterletStatusManifestWork(ctx context.Context, targetHubClient clien
 	}
 	_ = targetHubClient.Create(ctx, ns)
 
-	klusterletManifest := map[string]interface{}{
+	klusterletManifest := map[string]any{
 		"apiVersion": "operator.open-cluster-management.io/v1",
 		"kind":       "Klusterlet",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "klusterlet",
 		},
 	}
