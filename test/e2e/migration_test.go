@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
+	operatorv1 "open-cluster-management.io/api/operator/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -28,12 +29,13 @@ const (
 
 var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 	var (
-		sourceHubName    string
-		targetHubName    string
-		clusterToMigrate string
-		migrationName    string
-		sourceHubClient  client.Client
-		targetHubClient  client.Client
+		sourceHubName        string
+		targetHubName        string
+		clusterToMigrate     string
+		migrationName        string
+		sourceHubClient      client.Client
+		targetHubClient      client.Client
+		managedClusterClient client.Client
 	)
 
 	BeforeAll(func() {
@@ -48,6 +50,9 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 		sourceHubClient, err = testClients.RuntimeClient(sourceHubName, agentScheme)
 		Expect(err).NotTo(HaveOccurred())
 		targetHubClient, err = testClients.RuntimeClient(targetHubName, agentScheme)
+		Expect(err).NotTo(HaveOccurred())
+		// Get managed cluster client for verifying resources on the managed cluster
+		managedClusterClient, err = testClients.RuntimeClient(clusterToMigrate, agentScheme)
 		Expect(err).NotTo(HaveOccurred())
 
 		By(fmt.Sprintf("Migrating %s from %s to %s", clusterToMigrate, sourceHubName, targetHubName))
@@ -120,6 +125,56 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 
 			By("Mock: Creating ManifestWork to deploy bootstrap secret and patch klusterlet on managed cluster")
 			mockKlusterletMigration(ctx, sourceHubClient, clusterToMigrate, targetHubName)
+		})
+
+		It("should verify bootstrap secret and klusterlet are configured on managed cluster", func() {
+			bootstrapSecretName := fmt.Sprintf("bootstrap-%s", targetHubName)
+
+			By("Verifying bootstrap secret exists on managed cluster")
+			Eventually(func() error {
+				secret := &corev1.Secret{}
+				return managedClusterClient.Get(ctx, types.NamespacedName{
+					Name:      bootstrapSecretName,
+					Namespace: "open-cluster-management-agent",
+				}, secret)
+			}, 2*time.Minute, migrationPollInterval).Should(Succeed())
+
+			By("Verifying klusterlet has MultipleHubs feature gate enabled")
+			Eventually(func() bool {
+				klusterlet := &operatorv1.Klusterlet{}
+				if err := managedClusterClient.Get(ctx, types.NamespacedName{Name: "klusterlet"}, klusterlet); err != nil {
+					return false
+				}
+				// Check if MultipleHubs feature gate is enabled
+				if klusterlet.Spec.RegistrationConfiguration == nil {
+					return false
+				}
+				for _, fg := range klusterlet.Spec.RegistrationConfiguration.FeatureGates {
+					if fg.Feature == "MultipleHubs" && fg.Mode == operatorv1.FeatureGateModeTypeEnable {
+						return true
+					}
+				}
+				return false
+			}, 2*time.Minute, migrationPollInterval).Should(BeTrue())
+
+			By("Verifying klusterlet has bootstrap kubeconfig secrets configured")
+			Eventually(func() bool {
+				klusterlet := &operatorv1.Klusterlet{}
+				if err := managedClusterClient.Get(ctx, types.NamespacedName{Name: "klusterlet"}, klusterlet); err != nil {
+					return false
+				}
+				if klusterlet.Spec.RegistrationConfiguration == nil ||
+					klusterlet.Spec.RegistrationConfiguration.BootstrapKubeConfigs.LocalSecrets.KubeConfigSecrets == nil {
+					return false
+				}
+				// Check if the target hub bootstrap secret is in the list
+				for _, secret := range klusterlet.Spec.RegistrationConfiguration.BootstrapKubeConfigs.LocalSecrets.KubeConfigSecrets {
+					if secret.Name == bootstrapSecretName {
+						return true
+					}
+				}
+				return false
+			}, 2*time.Minute, migrationPollInterval).Should(BeTrue())
 		})
 
 		It("should wait for Registering phase and mock klusterlet status ManifestWork", func() {
