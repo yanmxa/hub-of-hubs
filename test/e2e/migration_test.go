@@ -300,6 +300,12 @@ func mockKlusterletMigration(ctx context.Context, sourceHubClient, managedCluste
 		},
 	}
 
+	// Ensure TypeMeta is set for serialization (controller-runtime objects don't include it by default)
+	existingKlusterlet.TypeMeta = metav1.TypeMeta{
+		APIVersion: "operator.open-cluster-management.io/v1",
+		Kind:       "Klusterlet",
+	}
+
 	// Serialize the merged klusterlet
 	klusterletBytes, _ := json.Marshal(existingKlusterlet)
 	secretBytes, _ := json.Marshal(targetBootstrapSecret)
