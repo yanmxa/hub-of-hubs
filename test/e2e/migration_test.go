@@ -124,7 +124,7 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 			}, 2*time.Minute, migrationPollInterval).Should(BeTrue())
 
 			By("Mock: Creating ManifestWork to deploy bootstrap secret and patch klusterlet on managed cluster")
-			mockKlusterletMigration(ctx, sourceHubClient, clusterToMigrate, targetHubName)
+			mockKlusterletMigration(ctx, sourceHubClient, managedClusterClient, clusterToMigrate, targetHubName)
 		})
 
 		It("should verify bootstrap secrets and klusterlet are configured on managed cluster", func() {
@@ -240,7 +240,7 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 
 // mockKlusterletMigration creates a ManifestWork on source hub to deploy bootstrap secret
 // and patch klusterlet on the managed cluster. This mocks the KlusterletConfig behavior in ACM.
-func mockKlusterletMigration(ctx context.Context, sourceHubClient client.Client, clusterName, targetHub string) {
+func mockKlusterletMigration(ctx context.Context, sourceHubClient, managedClusterClient client.Client, clusterName, targetHub string) {
 	// Get bootstrap secret from multicluster-engine namespace
 	bootstrapSecret := &corev1.Secret{}
 	bootstrapSecretName := fmt.Sprintf("bootstrap-%s", targetHub)
@@ -254,10 +254,10 @@ func mockKlusterletMigration(ctx context.Context, sourceHubClient client.Client,
 	}
 
 	// Create bootstrap secret manifest for managed cluster
-	targetBootstrapSecret := map[string]interface{}{
+	targetBootstrapSecret := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      bootstrapSecretName,
 			"namespace": "open-cluster-management-agent",
 		},
@@ -265,34 +265,44 @@ func mockKlusterletMigration(ctx context.Context, sourceHubClient client.Client,
 		"type": "Opaque",
 	}
 
-	// Create klusterlet patch manifest
-	klusterletPatch := map[string]interface{}{
-		"apiVersion": "operator.open-cluster-management.io/v1",
-		"kind":       "Klusterlet",
-		"metadata": map[string]interface{}{
-			"name": "klusterlet",
-		},
-		"spec": map[string]interface{}{
-			"registrationConfiguration": map[string]interface{}{
-				"featureGates": []map[string]interface{}{
-					{"feature": "MultipleHubs", "mode": "Enable"},
-				},
-				"bootstrapKubeConfigs": map[string]interface{}{
-					"type": "LocalSecrets",
-					"localSecretsConfig": map[string]interface{}{
-						"hubConnectionTimeoutSeconds": 180,
-						"kubeConfigSecrets": []map[string]interface{}{
-							{"name": bootstrapSecretName},
-							{"name": "hub-kubeconfig-secret"},
-						},
-					},
-				},
+	// Get existing klusterlet from managed cluster to merge configuration
+	existingKlusterlet := &operatorv1.Klusterlet{}
+	err = managedClusterClient.Get(ctx, types.NamespacedName{Name: "klusterlet"}, existingKlusterlet)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Merge: Add MultipleHubs feature gate if not already present
+	if existingKlusterlet.Spec.RegistrationConfiguration == nil {
+		existingKlusterlet.Spec.RegistrationConfiguration = &operatorv1.RegistrationConfiguration{}
+	}
+	hasMultipleHubs := false
+	for _, fg := range existingKlusterlet.Spec.RegistrationConfiguration.FeatureGates {
+		if fg.Feature == "MultipleHubs" {
+			hasMultipleHubs = true
+			break
+		}
+	}
+	if !hasMultipleHubs {
+		existingKlusterlet.Spec.RegistrationConfiguration.FeatureGates = append(
+			existingKlusterlet.Spec.RegistrationConfiguration.FeatureGates,
+			operatorv1.FeatureGate{Feature: "MultipleHubs", Mode: operatorv1.FeatureGateModeTypeEnable},
+		)
+	}
+
+	// Merge: Configure bootstrap kubeconfigs with both target and source hub secrets
+	existingKlusterlet.Spec.RegistrationConfiguration.BootstrapKubeConfigs = operatorv1.BootstrapKubeConfigs{
+		Type: operatorv1.LocalSecrets,
+		LocalSecrets: &operatorv1.LocalSecretsConfig{
+			HubConnectionTimeoutSeconds: 180,
+			KubeConfigSecrets: []operatorv1.KubeConfigSecret{
+				{Name: bootstrapSecretName},
+				{Name: "hub-kubeconfig-secret"},
 			},
 		},
 	}
 
+	// Serialize the merged klusterlet
+	klusterletBytes, _ := json.Marshal(existingKlusterlet)
 	secretBytes, _ := json.Marshal(targetBootstrapSecret)
-	klusterletBytes, _ := json.Marshal(klusterletPatch)
 
 	manifestWork := &workv1.ManifestWork{
 		ObjectMeta: metav1.ObjectMeta{
