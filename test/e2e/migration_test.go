@@ -8,7 +8,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	appsv1 "k8s.io/api/apps/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -60,26 +60,62 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 
 		By(fmt.Sprintf("Migrating %s from %s to %s", clusterToMigrate, sourceHubName, targetHubName))
 
-		// Ensure managed cluster is available on source hub BEFORE any tests run
-		// In KinD e2e, the work-agent doesn't run so the lease isn't updated
-		// This must be done early so the agent's informer cache has time to sync
-		By("Patching managed cluster status to Available in BeforeAll")
+		// Ensure managed cluster lease is fresh and status is available
+		// In KinD e2e, there's no work-agent so we need to mock these
+		By("Creating/updating managed cluster lease to keep it fresh")
+		lease := &coordinationv1.Lease{}
+		leaseName := types.NamespacedName{
+			Name:      "managed-cluster-lease",
+			Namespace: clusterToMigrate, // hub1-cluster1 namespace
+		}
+		err = sourceHubClient.Get(ctx, leaseName, lease)
+		if errors.IsNotFound(err) {
+			// Create the lease if it doesn't exist
+			holderIdentity := "registration-agent"
+			leaseDurationSeconds := int32(300) // 5 minutes
+			now := metav1.NewMicroTime(time.Now())
+			lease = &coordinationv1.Lease{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-cluster-lease",
+					Namespace: clusterToMigrate,
+				},
+				Spec: coordinationv1.LeaseSpec{
+					HolderIdentity:       &holderIdentity,
+					LeaseDurationSeconds: &leaseDurationSeconds,
+					AcquireTime:          &now,
+					RenewTime:            &now,
+				},
+			}
+			Expect(sourceHubClient.Create(ctx, lease)).To(Succeed())
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+			now := metav1.NewMicroTime(time.Now())
+			lease.Spec.RenewTime = &now
+			Expect(sourceHubClient.Update(ctx, lease)).To(Succeed())
+		}
+
+		By("Waiting for registration controller to update managed cluster status")
+		time.Sleep(10 * time.Second)
+
+		By("Patching managed cluster status to Available")
 		mc := &clusterv1.ManagedCluster{}
 		err = sourceHubClient.Get(ctx, types.NamespacedName{Name: clusterToMigrate}, mc)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Update the ManagedClusterConditionAvailable to True
-		availableConditionFound := false
+		conditionFound := false
 		for i, cond := range mc.Status.Conditions {
 			if cond.Type == "ManagedClusterConditionAvailable" {
 				mc.Status.Conditions[i].Status = metav1.ConditionTrue
 				mc.Status.Conditions[i].Reason = "ManagedClusterAvailable"
 				mc.Status.Conditions[i].Message = "Managed cluster is available"
-				availableConditionFound = true
+				mc.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				conditionFound = true
 				break
 			}
 		}
-		if !availableConditionFound {
+		// Add the condition if it doesn't exist
+		if !conditionFound {
 			mc.Status.Conditions = append(mc.Status.Conditions, metav1.Condition{
 				Type:               "ManagedClusterConditionAvailable",
 				Status:             metav1.ConditionTrue,
@@ -91,29 +127,59 @@ var _ = Describe("Migration E2E", Label("e2e-test-migration"), Ordered, func() {
 		Expect(sourceHubClient.Status().Update(ctx, mc)).To(Succeed())
 
 		By("Restarting global-hub-agent on source hub to force cache refresh")
-		// The agent's informer cache may have stale data; restart the agent to force a fresh cache
 		agentNamespace := "multicluster-global-hub-agent"
-		agentDeployment := &appsv1.Deployment{}
-		err = sourceHubClient.Get(ctx, types.NamespacedName{
-			Name:      "multicluster-global-hub-agent",
-			Namespace: agentNamespace,
-		}, agentDeployment)
-		if err == nil {
-			// Delete the agent pods to force a restart
-			podList := &corev1.PodList{}
-			listOpts := []client.ListOption{
-				client.InNamespace(agentNamespace),
-				client.MatchingLabels{"name": "multicluster-global-hub-agent"},
-			}
-			if err := sourceHubClient.List(ctx, podList, listOpts...); err == nil {
-				for _, pod := range podList.Items {
-					_ = sourceHubClient.Delete(ctx, &pod)
-				}
+		podList := &corev1.PodList{}
+		listOpts := []client.ListOption{
+			client.InNamespace(agentNamespace),
+			client.MatchingLabels{"name": "multicluster-global-hub-agent"},
+		}
+		if err := sourceHubClient.List(ctx, podList, listOpts...); err == nil {
+			for _, pod := range podList.Items {
+				_ = sourceHubClient.Delete(ctx, &pod)
 			}
 		}
 
-		By("Waiting for agent to restart and sync")
-		time.Sleep(30 * time.Second) // Give the agent time to restart and sync its cache
+		By("Waiting for agent pods to be deleted")
+		time.Sleep(5 * time.Second)
+
+		By("Refreshing lease before agent starts")
+		// Update lease again right before agent starts syncing
+		lease = &coordinationv1.Lease{}
+		err = sourceHubClient.Get(ctx, leaseName, lease)
+		if err == nil {
+			now := metav1.NewMicroTime(time.Now())
+			lease.Spec.RenewTime = &now
+			_ = sourceHubClient.Update(ctx, lease)
+		}
+
+		By("Re-patching managed cluster status after pod deletion")
+		mc = &clusterv1.ManagedCluster{}
+		err = sourceHubClient.Get(ctx, types.NamespacedName{Name: clusterToMigrate}, mc)
+		Expect(err).NotTo(HaveOccurred())
+		conditionFound = false
+		for i, cond := range mc.Status.Conditions {
+			if cond.Type == "ManagedClusterConditionAvailable" {
+				mc.Status.Conditions[i].Status = metav1.ConditionTrue
+				mc.Status.Conditions[i].Reason = "ManagedClusterAvailable"
+				mc.Status.Conditions[i].Message = "Managed cluster is available"
+				mc.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				conditionFound = true
+				break
+			}
+		}
+		if !conditionFound {
+			mc.Status.Conditions = append(mc.Status.Conditions, metav1.Condition{
+				Type:               "ManagedClusterConditionAvailable",
+				Status:             metav1.ConditionTrue,
+				Reason:             "ManagedClusterAvailable",
+				Message:            "Managed cluster is available",
+				LastTransitionTime: metav1.Now(),
+			})
+		}
+		_ = sourceHubClient.Status().Update(ctx, mc)
+
+		By("Waiting for agent to restart and sync cache")
+		time.Sleep(20 * time.Second)
 	})
 
 	AfterAll(func() {
